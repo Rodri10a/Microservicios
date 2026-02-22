@@ -195,3 +195,76 @@ def eliminar_restaurante(restaurant_id):
 
     return jsonify({"message": f"Restaurante {restaurant_id} eliminado"}), 200
 
+# ── Menú ──────────────────────────────────────────────────────────────────────
+
+@app.route("/restaurants/<int:restaurant_id>/menu", methods=["GET"])
+@requiere_jwt
+def listar_menu(restaurant_id):
+    """Lista todos los items del menú de un restaurante."""
+    with get_db() as conn:
+        restaurant = conn.execute(
+            "SELECT id FROM restaurants WHERE id = ?", (restaurant_id,)
+        ).fetchone()
+
+        if not restaurant:
+            return jsonify({"error": "Restaurante no encontrado"}), 404
+
+        items = conn.execute(
+            "SELECT * FROM menu_items WHERE restaurant_id = ?", (restaurant_id,)
+        ).fetchall()
+
+    return jsonify({"menu": [dict(i) for i in items], "total": len(items)}), 200
+
+
+@app.route("/restaurants/<int:restaurant_id>/menu", methods=["POST"])
+@requiere_jwt
+def agregar_item_menu(restaurant_id):
+    """
+    Agrega un item al menú del restaurante.
+    Body: { "name": str, "price": float, "description": str? }
+    """
+    with get_db() as conn:
+        if not conn.execute(
+            "SELECT id FROM restaurants WHERE id = ?", (restaurant_id,)
+        ).fetchone():
+            return jsonify({"error": "Restaurante no encontrado"}), 404
+
+    datos = request.get_json()
+    for campo in ["name", "price"]:
+        if not datos or campo not in datos:
+            return jsonify({"error": f"El campo '{campo}' es obligatorio"}), 400
+
+    if datos["price"] <= 0:
+        return jsonify({"error": "El precio debe ser mayor a 0"}), 400
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO menu_items (restaurant_id, name, description, price) VALUES (?, ?, ?, ?)",
+            (restaurant_id, datos["name"], datos.get("description", ""), datos["price"])
+        )
+        conn.commit()
+        item_id = cursor.lastrowid
+
+    return jsonify({
+        "message": "Item agregado al menú",
+        "item":    {"id": item_id, "name": datos["name"], "price": datos["price"]}
+    }), 201
+
+
+@app.route("/menu-items/<int:item_id>", methods=["GET"])
+@requiere_token_interno
+def obtener_item_interno(item_id):
+    """
+    Endpoint INTERNO — solo para otros microservicios.
+    El order_service lo usa para verificar que un item existe.
+    Auth: INTERNAL_TOKEN (no JWT de usuario)
+    """
+    with get_db() as conn:
+        item = conn.execute(
+            "SELECT * FROM menu_items WHERE id = ? AND available = 1", (item_id,)
+        ).fetchone()
+
+    if not item:
+        return jsonify({"error": f"Item {item_id} no encontrado o no disponible"}), 404
+
+    return jsonify(dict(item)), 200 
