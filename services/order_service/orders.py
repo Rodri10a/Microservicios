@@ -187,3 +187,92 @@ def crear_pedido():
             "items":         items_verificados
         }
     }), 201
+    
+@app.route("/orders", methods=["GET"])
+@requiere_jwt
+def listar_pedidos():
+    """
+    Lista pedidos. Filtrables por status.
+    Query params: ?status=pending
+    """
+    status = request.args.get("status")
+    query  = "SELECT * FROM orders WHERE 1=1"
+    params = []
+
+    if status:
+        if status not in ESTADOS_VALIDOS:
+            return jsonify({"error": f"Status inválido. Opciones: {ESTADOS_VALIDOS}"}), 400
+        query += " AND status = ?"
+        params.append(status)
+
+    query += " ORDER BY created_at DESC"
+
+    with get_db() as conn:
+        orders = conn.execute(query, params).fetchall()
+
+    return jsonify({"orders": [dict(o) for o in orders], "total": len(orders)}), 200
+
+
+@app.route("/orders/<int:order_id>", methods=["GET"])
+@requiere_jwt
+def obtener_pedido(order_id):
+    """Retorna un pedido con todos sus items."""
+    with get_db() as conn:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?", (order_id,)
+        ).fetchone()
+
+        if not order:
+            return jsonify({"error": "Pedido no encontrado"}), 404
+
+        items = conn.execute(
+            "SELECT * FROM order_items WHERE order_id = ?", (order_id,)
+        ).fetchall()
+
+    return jsonify({**dict(order), "items": [dict(i) for i in items]}), 200
+
+
+@app.route("/orders/<int:order_id>/status", methods=["PUT"])
+@requiere_jwt
+def actualizar_estado(order_id):
+    """
+    Actualiza el estado de un pedido.
+    Valida que la transición sea permitida.
+    Body: { "status": "confirmed" | "preparing" | "ready" | "cancelled" }
+    """
+    with get_db() as conn:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?", (order_id,)
+        ).fetchone()
+
+    if not order:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    datos      = request.get_json()
+    new_status = datos.get("status") if datos else None
+
+    if not new_status:
+        return jsonify({"error": "El campo 'status' es requerido"}), 400
+
+    if new_status not in ESTADOS_VALIDOS:
+        return jsonify({"error": f"Status inválido. Opciones: {ESTADOS_VALIDOS}"}), 400
+
+    current_status  = order["status"]
+    transiciones_ok = TRANSICIONES_VALIDAS.get(current_status, [])
+
+    if new_status not in transiciones_ok:
+        return jsonify({
+            "error":   f"No se puede pasar de '{current_status}' a '{new_status}'",
+            "allowed": transiciones_ok
+        }), 422
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE orders SET status=?, updated_at=datetime('now') WHERE id=?",
+            (new_status, order_id)
+        )
+        conn.commit()
+
+    app.logger.info(f"Pedido {order_id}: {current_status} → {new_status}")
+
+    return jsonify({"message": f"Pedido actualizado a '{new_status}'"}), 200
