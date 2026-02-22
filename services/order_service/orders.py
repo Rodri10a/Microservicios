@@ -276,3 +276,74 @@ def actualizar_estado(order_id):
     app.logger.info(f"Pedido {order_id}: {current_status} → {new_status}")
 
     return jsonify({"message": f"Pedido actualizado a '{new_status}'"}), 200
+
+@app.route("/orders/<int:order_id>", methods=["DELETE"])
+@requiere_jwt
+def cancelar_pedido(order_id):
+    """Cancela un pedido si aún está en estado 'pending' o 'confirmed'."""
+    with get_db() as conn:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?", (order_id,)
+        ).fetchone()
+
+    if not order:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    if order["status"] not in ["pending", "confirmed"]:
+        return jsonify({
+            "error": f"No se puede cancelar un pedido en estado '{order['status']}'"
+        }), 422
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE orders SET status='cancelled', updated_at=datetime('now') WHERE id=?",
+            (order_id,)
+        )
+        conn.commit()
+
+    return jsonify({"message": f"Pedido {order_id} cancelado"}), 200
+
+
+@app.route("/orders/<int:order_id>/ready", methods=["GET"])
+@requiere_token_interno
+def verificar_pedido_listo(order_id):
+    """
+    Endpoint INTERNO — solo para delivery_service.
+    Verifica si un pedido está en estado 'ready' para ser despachado.
+    """
+    with get_db() as conn:
+        order = conn.execute(
+            "SELECT * FROM orders WHERE id = ?", (order_id,)
+        ).fetchone()
+
+    if not order:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    if order["status"] != "ready":
+        return jsonify({
+            "error":          f"El pedido no está listo (estado actual: '{order['status']}')",
+            "current_status": order["status"]
+        }), 422
+
+    return jsonify({
+        "order_id":      order["id"],
+        "customer_name": order["customer_name"],
+        "restaurant_id": order["restaurant_id"],
+        "total":         order["total"],
+        "status":        order["status"]
+    }), 200
+
+
+# ─── Arranque ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    init_db()
+    print("=" * 60)
+    print("📦 Order Service corriendo en http://localhost:5002")
+    print("   POST /orders            → crear pedido")
+    print("   GET  /orders            → listar pedidos")
+    print("   PUT  /orders/:id/status → cambiar estado")
+    print("=" * 60)
+    app.run(port=5002, debug=True, use_reloader=False)
+
+    
