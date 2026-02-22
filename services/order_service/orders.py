@@ -92,3 +92,98 @@ def obtener_menu_item(item_id: int) -> dict:
     app.logger.error(f"[restaurant_service] Todos los reintentos fallaron: {ultimo_error}")
     raise Exception("restaurant_service no disponible. Intentá más tarde.") 
 
+# ─── ENDPOINTS ────────────────────────────────────────────────────────────────
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "order_service", "port": 5002}), 200
+
+
+@app.route("/orders", methods=["POST"])
+@requiere_jwt
+def crear_pedido():
+    """
+    Crea un nuevo pedido.
+    Flujo:
+      1. Valida el body
+      2. Para cada item llama a restaurant_service para verificar existencia y precio
+      3. Calcula el total
+      4. Guarda el pedido en la DB local
+
+    Body:
+        {
+          "restaurant_id": int,
+          "customer_name": str,
+          "items": [
+            { "menu_item_id": int, "quantity": int }
+          ]
+        }
+    """
+    datos = request.get_json()
+
+    for campo in ["restaurant_id", "customer_name", "items"]:
+        if not datos or campo not in datos:
+            return jsonify({"error": f"Falta el campo '{campo}'"}), 400
+
+    if not isinstance(datos["items"], list) or len(datos["items"]) == 0:
+        return jsonify({"error": "El pedido debe tener al menos un item"}), 400
+
+    # Verificar cada item en restaurant_service y calcular total
+    items_verificados = []
+    total = 0.0
+
+    for item_req in datos["items"]:
+        if "menu_item_id" not in item_req or "quantity" not in item_req:
+            return jsonify({"error": "Cada item necesita 'menu_item_id' y 'quantity'"}), 400
+
+        if item_req["quantity"] <= 0:
+            return jsonify({"error": "La cantidad debe ser mayor a 0"}), 400
+
+        try:
+            menu_item = obtener_menu_item(item_req["menu_item_id"])
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 404
+        except Exception as e:
+            return jsonify({"error": str(e)}), 503
+
+        subtotal = menu_item["price"] * item_req["quantity"]
+        total   += subtotal
+
+        items_verificados.append({
+            "menu_item_id": item_req["menu_item_id"],
+            "item_name":    menu_item["name"],
+            "unit_price":   menu_item["price"],
+            "quantity":     item_req["quantity"]
+        })
+
+    # Guardar en DB local
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO orders (restaurant_id, customer_name, total) VALUES (?, ?, ?)",
+            (datos["restaurant_id"], datos["customer_name"], round(total, 2))
+        )
+        order_id = cursor.lastrowid
+
+        for item in items_verificados:
+            conn.execute(
+                """INSERT INTO order_items
+                (order_id, menu_item_id, item_name, unit_price, quantity)
+                VALUES (?, ?, ?, ?, ?)""",
+                (order_id, item["menu_item_id"], item["item_name"],
+                item["unit_price"], item["quantity"])
+            )
+        conn.commit()
+
+    app.logger.info(f"Pedido creado: id={order_id}, total={total}")
+
+    return jsonify({
+        "message": "Pedido creado",
+        "order": {
+            "id":            order_id,
+            "restaurant_id": datos["restaurant_id"],
+            "customer_name": datos["customer_name"],
+            "status":        "pending",
+            "total":         round(total, 2),
+            "items":         items_verificados
+        }
+    }), 201
