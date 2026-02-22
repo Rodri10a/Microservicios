@@ -268,3 +268,15 @@ def obtener_item_interno(item_id):
         return jsonify({"error": f"Item {item_id} no encontrado o no disponible"}), 404
 
     return jsonify(dict(item)), 200 
+
+# ─── Arranque ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    init_db()
+    print("=" * 60)
+    print("🍔 Restaurant Service corriendo en http://localhost:5001")
+    print("   POST /auth/token     → obtener JWT")
+    print("   GET  /restaurants    → listar restaurantes")
+    print("   POST /restaurants    → crear restaurante")
+    print("=" * 60)
+    app.run(port=5001, debug=True, use_reloader=False) 
