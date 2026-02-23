@@ -206,3 +206,92 @@ def obtener_delivery(delivery_id):
         return jsonify({"error": "Delivery no encontrado"}), 404
 
     return jsonify(dict(delivery)), 200
+
+@app.route("/deliveries/<int:delivery_id>/status", methods=["PUT"])
+@requiere_jwt
+def actualizar_estado(delivery_id):
+    """
+    Actualiza el estado del delivery.
+    Transiciones válidas:
+        assigned → picked_up | failed
+        picked_up → in_transit | failed
+        in_transit → delivered | failed
+    Body: { "status": str }
+    """
+    with get_db() as conn:
+        delivery = conn.execute(
+            "SELECT * FROM deliveries WHERE id = ?", (delivery_id,)
+        ).fetchone()
+
+    if not delivery:
+        return jsonify({"error": "Delivery no encontrado"}), 404
+
+    datos      = request.get_json()
+    new_status = datos.get("status") if datos else None
+
+    if not new_status:
+        return jsonify({"error": "El campo 'status' es requerido"}), 400
+
+    if new_status not in ESTADOS_VALIDOS:
+        return jsonify({"error": f"Status inválido. Opciones: {ESTADOS_VALIDOS}"}), 400
+
+    current_status  = delivery["status"]
+    transiciones_ok = TRANSICIONES_VALIDAS.get(current_status, [])
+
+    if new_status not in transiciones_ok:
+        return jsonify({
+            "error":   f"No se puede pasar de '{current_status}' a '{new_status}'",
+            "allowed": transiciones_ok
+        }), 422
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE deliveries SET status=?, updated_at=datetime('now') WHERE id=?",
+            (new_status, delivery_id)
+        )
+        conn.commit()
+
+    app.logger.info(f"Delivery {delivery_id}: {current_status} → {new_status}")
+
+    return jsonify({"message": f"Delivery actualizado a '{new_status}'"}), 200
+
+
+@app.route("/deliveries/<int:delivery_id>", methods=["DELETE"])
+@requiere_jwt
+def cancelar_delivery(delivery_id):
+    """Cancela un delivery si aún está en estado 'assigned'."""
+    with get_db() as conn:
+        delivery = conn.execute(
+            "SELECT * FROM deliveries WHERE id = ?", (delivery_id,)
+        ).fetchone()
+
+    if not delivery:
+        return jsonify({"error": "Delivery no encontrado"}), 404
+
+    if delivery["status"] != "assigned":
+        return jsonify({
+            "error": f"Solo se puede cancelar en estado 'assigned' (actual: '{delivery['status']}')"
+        }), 422
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE deliveries SET status='failed', updated_at=datetime('now') WHERE id=?",
+            (delivery_id,)
+        )
+        conn.commit()
+
+    return jsonify({"message": f"Delivery {delivery_id} cancelado"}), 200
+
+
+# ─── Arranque ─────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    init_db()
+    print("=" * 60)
+    print("🚴 Delivery Service corriendo en http://localhost:5003")
+    print("   POST /deliveries            → crear delivery")
+    print("   GET  /deliveries            → listar deliveries")
+    print("   PUT  /deliveries/:id/status → actualizar estado")
+    print("=" * 60)
+    app.run(port=5003, debug=True, use_reloader=False)
+    
