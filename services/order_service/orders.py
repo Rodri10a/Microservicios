@@ -3,33 +3,24 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
-import jwt
 import time
-import datetime
+import logging
 from functools import wraps
-
-import requests
+import jwt
+import requests as http_requests
 from flask import Flask, jsonify, request
 from database import get_db, init_db
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 # ─── Configuración ────────────────────────────────────────────────────────────
-SECRET_KEY             = os.getenv("SECRET_KEY",             "pinguino_secreto_2024")
-INTERNAL_TOKEN         = os.getenv("INTERNAL_TOKEN",         "token_interno_servicios")
+SECRET_KEY     = os.getenv("SECRET_KEY",     "pinguino_secreto_2024")
+INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno_servicios")
 RESTAURANT_SERVICE_URL = os.getenv("RESTAURANT_SERVICE_URL", "http://localhost:5001")
 
-ESTADOS_VALIDOS      = ["pending", "confirmed", "preparing", "ready", "cancelled"]
-TRANSICIONES_VALIDAS = {
-    "pending":   ["confirmed", "cancelled"],
-    "confirmed": ["preparing", "cancelled"],
-    "preparing": ["ready",     "cancelled"],
-    "ready":     [],
-    "cancelled": []
-}
 
-
-# ─── Autenticación ────────────────────────────────────────────────────────────
+# ─── Auth ────────────────────────────────────────────────────────────────────
 
 def requiere_jwt(f):
     @wraps(f)
@@ -59,21 +50,19 @@ def requiere_token_interno(f):
     return decorador
 
 
-# ─── Comunicación con restaurant_service ──────────────────────────────────────
+# ─── Service Client ──────────────────────────────────────────────────────────
 
-def obtener_menu_item(item_id: int) -> dict:
-    """
-    Llama a restaurant_service para verificar que el item existe.
-    Implementa retry con backoff para resiliencia.
-    """
+def llamar_servicio(url: str, servicio: str) -> dict:
     def _llamar():
-        resp = requests.get(
-            f"{RESTAURANT_SERVICE_URL}/menu-items/{item_id}",
+        resp = http_requests.get(
+            url,
             headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"},
             timeout=3
         )
         if resp.status_code == 404:
-            raise ValueError(f"Item de menú {item_id} no existe o no está disponible")
+            raise ValueError(resp.json().get("error", "Recurso no encontrado"))
+        if resp.status_code == 422:
+            raise ValueError(resp.json().get("error", "Validación fallida"))
         resp.raise_for_status()
         return resp.json()
 
@@ -81,16 +70,25 @@ def obtener_menu_item(item_id: int) -> dict:
     for intento in range(1, 4):
         try:
             return _llamar()
-        except ValueError as e:
-            raise e
+        except ValueError:
+            raise
         except Exception as e:
             ultimo_error = e
-            app.logger.warning(f"[restaurant_service] Intento {intento}/3 falló: {e}")
+            logger.warning(f"[{servicio}] Intento {intento}/3 falló: {e}")
             if intento < 3:
                 time.sleep(0.5 * intento)
 
-    app.logger.error(f"[restaurant_service] Todos los reintentos fallaron: {ultimo_error}")
-    raise Exception("restaurant_service no disponible. Intentá más tarde.") 
+    logger.error(f"[{servicio}] Todos los reintentos fallaron: {ultimo_error}")
+    raise Exception(f"{servicio} no disponible. Intentá más tarde.")
+
+ESTADOS_VALIDOS = ["pending", "confirmed", "preparing", "ready", "cancelled"]
+TRANSICIONES_VALIDAS = {
+    "pending":   ["confirmed", "cancelled"],
+    "confirmed": ["preparing", "cancelled"],
+    "preparing": ["ready",     "cancelled"],
+    "ready":     [],
+    "cancelled": []
+}
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 
@@ -140,7 +138,10 @@ def crear_pedido():
             return jsonify({"error": "La cantidad debe ser mayor a 0"}), 400
 
         try:
-            menu_item = obtener_menu_item(item_req["menu_item_id"])
+            menu_item = llamar_servicio(
+                f"{RESTAURANT_SERVICE_URL}/menu-items/{item_req['menu_item_id']}",
+                "restaurant_service"
+            )
         except ValueError as e:
             return jsonify({"error": str(e)}), 404
         except Exception as e:
@@ -187,7 +188,8 @@ def crear_pedido():
             "items":         items_verificados
         }
     }), 201
-    
+
+
 @app.route("/orders", methods=["GET"])
 @requiere_jwt
 def listar_pedidos():
@@ -277,6 +279,7 @@ def actualizar_estado(order_id):
 
     return jsonify({"message": f"Pedido actualizado a '{new_status}'"}), 200
 
+
 @app.route("/orders/<int:order_id>", methods=["DELETE"])
 @requiere_jwt
 def cancelar_pedido(order_id):
@@ -345,5 +348,3 @@ if __name__ == "__main__":
     print("   PUT  /orders/:id/status → cambiar estado")
     print("=" * 60)
     app.run(port=5002, debug=True, use_reloader=False)
-
-    

@@ -17,7 +17,7 @@ def get_db() -> sqlite3.Connection:
 def init_db():
     with get_db() as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS deliveries (
+            CREATE TABLE IF NOT EXISTS deliveries ( 
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_id      INTEGER NOT NULL UNIQUE,
                 customer_name TEXT    NOT NULL,
@@ -29,3 +29,4 @@ def init_db():
             )
         """)
         conn.commit()
+        

@@ -3,32 +3,24 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
-import jwt
 import time
-import datetime
+import logging
 from functools import wraps
-
-import requests
+import jwt
+import requests as http_requests
 from flask import Flask, jsonify, request
 from database import get_db, init_db
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 # ─── Configuración ────────────────────────────────────────────────────────────
-SECRET_KEY        = os.getenv("SECRET_KEY",        "pinguino_secreto_2024")
-INTERNAL_TOKEN    = os.getenv("INTERNAL_TOKEN",    "token_interno_servicios")
+SECRET_KEY     = os.getenv("SECRET_KEY",     "pinguino_secreto_2024")
+INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno_servicios")
 ORDER_SERVICE_URL = os.getenv("ORDER_SERVICE_URL", "http://localhost:5002")
 
-ESTADOS_VALIDOS      = ["assigned", "picked_up", "in_transit", "delivered", "failed"]
-TRANSICIONES_VALIDAS = {
-    "assigned":   ["picked_up",  "failed"],
-    "picked_up":  ["in_transit", "failed"],
-    "in_transit": ["delivered",  "failed"],
-    "delivered":  [],
-    "failed":     []
-}
 
-# ─── Autenticación ────────────────────────────────────────────────────────────
+# ─── Auth ────────────────────────────────────────────────────────────────────
 
 def requiere_jwt(f):
     @wraps(f)
@@ -47,35 +39,19 @@ def requiere_jwt(f):
     return decorador
 
 
-def requiere_token_interno(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        auth  = request.headers.get("Authorization", "")
-        token = auth.replace("Bearer ", "").strip()
-        if token != INTERNAL_TOKEN:
-            return jsonify({"error": "Acceso restringido a servicios internos"}), 403
-        return f(*args, **kwargs)
-    return decorador
+# ─── Service Client ──────────────────────────────────────────────────────────
 
-
-# ─── Comunicación con order_service ───────────────────────────────────────────
-
-def verificar_pedido_listo(order_id: int) -> dict:
-    """
-    Llama a order_service para confirmar que el pedido está en estado 'ready'.
-    Implementa retry con backoff para resiliencia.
-    """
+def llamar_servicio(url: str, servicio: str) -> dict:
     def _llamar():
-        resp = requests.get(
-            f"{ORDER_SERVICE_URL}/orders/{order_id}/ready",
+        resp = http_requests.get(
+            url,
             headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"},
             timeout=3
         )
         if resp.status_code == 404:
-            raise ValueError(f"Pedido {order_id} no encontrado")
+            raise ValueError(resp.json().get("error", "Recurso no encontrado"))
         if resp.status_code == 422:
-            data = resp.json()
-            raise ValueError(data.get("error", "El pedido no está listo"))
+            raise ValueError(resp.json().get("error", "Validación fallida"))
         resp.raise_for_status()
         return resp.json()
 
@@ -83,16 +59,25 @@ def verificar_pedido_listo(order_id: int) -> dict:
     for intento in range(1, 4):
         try:
             return _llamar()
-        except ValueError as e:
-            raise e
+        except ValueError:
+            raise
         except Exception as e:
             ultimo_error = e
-            app.logger.warning(f"[order_service] Intento {intento}/3 falló: {e}")
+            logger.warning(f"[{servicio}] Intento {intento}/3 falló: {e}")
             if intento < 3:
                 time.sleep(0.5 * intento)
 
-    app.logger.error(f"[order_service] Todos los reintentos fallaron: {ultimo_error}")
-    raise Exception("order_service no disponible. Intentá más tarde.")
+    logger.error(f"[{servicio}] Todos los reintentos fallaron: {ultimo_error}")
+    raise Exception(f"{servicio} no disponible. Intentá más tarde.")
+
+ESTADOS_VALIDOS = ["assigned", "picked_up", "in_transit", "delivered", "failed"]
+TRANSICIONES_VALIDAS = {
+    "assigned":   ["picked_up",  "failed"],
+    "picked_up":  ["in_transit", "failed"],
+    "in_transit": ["delivered",  "failed"],
+    "delivered":  [],
+    "failed":     []
+}
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 
@@ -125,7 +110,10 @@ def crear_delivery():
 
     # Verificar en order_service que el pedido está listo
     try:
-        pedido = verificar_pedido_listo(datos["order_id"])
+        pedido = llamar_servicio(
+            f"{ORDER_SERVICE_URL}/orders/{datos['order_id']}/ready",
+            "order_service"
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 422
     except Exception as e:
@@ -206,6 +194,7 @@ def obtener_delivery(delivery_id):
         return jsonify({"error": "Delivery no encontrado"}), 404
 
     return jsonify(dict(delivery)), 200
+
 
 @app.route("/deliveries/<int:delivery_id>/status", methods=["PUT"])
 @requiere_jwt
@@ -294,4 +283,3 @@ if __name__ == "__main__":
     print("   PUT  /deliveries/:id/status → actualizar estado")
     print("=" * 60)
     app.run(port=5003, debug=True, use_reloader=False)
-    

@@ -3,11 +3,9 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 import os
-import jwt
-import time
 import datetime
 from functools import wraps
-
+import jwt
 from flask import Flask, jsonify, request
 from database import get_db, init_db
 
@@ -16,13 +14,12 @@ app = Flask(__name__)
 # ─── Configuración ────────────────────────────────────────────────────────────
 SECRET_KEY     = os.getenv("SECRET_KEY",     "pinguino_secreto_2024")
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno_servicios")
+DEMO_USER      = {"username": "admin", "password": "admin123", "role": "admin"}
 
-DEMO_USER = {"username": "admin", "password": "admin123", "role": "admin"}
 
-# ─── Utilidades de autenticación ──────────────────────────────────────────────
+# ─── Auth ────────────────────────────────────────────────────────────────────
 
 def crear_jwt(username: str, role: str) -> str:
-    """Genera un JWT válido por 8 horas."""
     payload = {
         "username": username,
         "role":     role,
@@ -32,7 +29,6 @@ def crear_jwt(username: str, role: str) -> str:
 
 
 def requiere_jwt(f):
-    """Decorador: valida que el header tenga un JWT válido."""
     @wraps(f)
     def decorador(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
@@ -42,15 +38,14 @@ def requiere_jwt(f):
             payload = jwt.decode(auth.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
             request.usuario_actual = payload
         except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token expirado. Volvé a loguearte."}), 401
+            return jsonify({"error": "Token expirado"}), 401
         except jwt.InvalidTokenError:
-            return jsonify({"error": "Token inválido. No pasás."}), 401
+            return jsonify({"error": "Token inválido"}), 401
         return f(*args, **kwargs)
     return decorador
 
 
 def requiere_token_interno(f):
-    """Solo acepta requests de otros microservicios con INTERNAL_TOKEN."""
     @wraps(f)
     def decorador(*args, **kwargs):
         auth  = request.headers.get("Authorization", "")
@@ -60,15 +55,12 @@ def requiere_token_interno(f):
         return f(*args, **kwargs)
     return decorador
 
-
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "restaurant_service", "port": 5001}), 200
 
-
-# ── Autenticación ─────────────────────────────────────────────────────────────
 
 @app.route("/auth/token", methods=["POST"])
 def obtener_token():
@@ -195,6 +187,7 @@ def eliminar_restaurante(restaurant_id):
 
     return jsonify({"message": f"Restaurante {restaurant_id} eliminado"}), 200
 
+
 # ── Menú ──────────────────────────────────────────────────────────────────────
 
 @app.route("/restaurants/<int:restaurant_id>/menu", methods=["GET"])
@@ -257,7 +250,6 @@ def obtener_item_interno(item_id):
     """
     Endpoint INTERNO — solo para otros microservicios.
     El order_service lo usa para verificar que un item existe.
-    Auth: INTERNAL_TOKEN (no JWT de usuario)
     """
     with get_db() as conn:
         item = conn.execute(
@@ -267,7 +259,8 @@ def obtener_item_interno(item_id):
     if not item:
         return jsonify({"error": f"Item {item_id} no encontrado o no disponible"}), 404
 
-    return jsonify(dict(item)), 200 
+    return jsonify(dict(item)), 200
+
 
 # ─── Arranque ─────────────────────────────────────────────────────────────────
 
@@ -279,4 +272,4 @@ if __name__ == "__main__":
     print("   GET  /restaurants    → listar restaurantes")
     print("   POST /restaurants    → crear restaurante")
     print("=" * 60)
-    app.run(port=5001, debug=True, use_reloader=False) 
+    app.run(port=5001, debug=True, use_reloader=False)
