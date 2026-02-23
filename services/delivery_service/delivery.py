@@ -94,3 +94,115 @@ def verificar_pedido_listo(order_id: int) -> dict:
     app.logger.error(f"[order_service] Todos los reintentos fallaron: {ultimo_error}")
     raise Exception("order_service no disponible. Intentá más tarde.")
 
+# ─── ENDPOINTS ────────────────────────────────────────────────────────────────
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "delivery_service", "port": 5003}), 200
+
+
+@app.route("/deliveries", methods=["POST"])
+@requiere_jwt
+def crear_delivery():
+    """
+    Asigna un repartidor a un pedido listo.
+    Flujo:
+      1. Verifica que el pedido está en estado 'ready' (llama a order_service)
+      2. Crea el registro de delivery en la DB local
+
+    Body:
+        {
+          "order_id":    int,
+          "address":     str,
+          "driver_name": str?
+        }
+    """
+    datos = request.get_json()
+
+    for campo in ["order_id", "address"]:
+        if not datos or campo not in datos:
+            return jsonify({"error": f"Falta el campo '{campo}'"}), 400
+
+    # Verificar en order_service que el pedido está listo
+    try:
+        pedido = verificar_pedido_listo(datos["order_id"])
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 422
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+    # Verificar que no exista ya un delivery para este pedido
+    with get_db() as conn:
+        existente = conn.execute(
+            "SELECT id FROM deliveries WHERE order_id = ?", (datos["order_id"],)
+        ).fetchone()
+
+    if existente:
+        return jsonify({"error": f"Ya existe un delivery para el pedido {datos['order_id']}"}), 409
+
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO deliveries (order_id, customer_name, address, driver_name)
+               VALUES (?, ?, ?, ?)""",
+            (
+                datos["order_id"],
+                pedido["customer_name"],
+                datos["address"],
+                datos.get("driver_name", "Sin asignar")
+            )
+        )
+        conn.commit()
+        delivery_id = cursor.lastrowid
+
+    app.logger.info(f"Delivery creado: id={delivery_id}, order_id={datos['order_id']}")
+
+    return jsonify({
+        "message":  "Delivery creado",
+        "delivery": {
+            "id":            delivery_id,
+            "order_id":      datos["order_id"],
+            "customer_name": pedido["customer_name"],
+            "address":       datos["address"],
+            "driver_name":   datos.get("driver_name", "Sin asignar"),
+            "status":        "assigned"
+        }
+    }), 201
+
+
+@app.route("/deliveries", methods=["GET"])
+@requiere_jwt
+def listar_deliveries():
+    """
+    Lista todos los deliveries.
+    Query params: ?status=in_transit
+    """
+    status = request.args.get("status")
+    query  = "SELECT * FROM deliveries WHERE 1=1"
+    params = []
+
+    if status:
+        if status not in ESTADOS_VALIDOS:
+            return jsonify({"error": f"Status inválido. Opciones: {ESTADOS_VALIDOS}"}), 400
+        query += " AND status = ?"
+        params.append(status)
+
+    query += " ORDER BY created_at DESC"
+
+    with get_db() as conn:
+        deliveries = conn.execute(query, params).fetchall()
+
+    return jsonify({"deliveries": [dict(d) for d in deliveries], "total": len(deliveries)}), 200
+
+
+@app.route("/deliveries/<int:delivery_id>", methods=["GET"])
+@requiere_jwt
+def obtener_delivery(delivery_id):
+    with get_db() as conn:
+        delivery = conn.execute(
+            "SELECT * FROM deliveries WHERE id = ?", (delivery_id,)
+        ).fetchone()
+
+    if not delivery:
+        return jsonify({"error": "Delivery no encontrado"}), 404
+
+    return jsonify(dict(delivery)), 200
