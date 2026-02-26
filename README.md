@@ -31,6 +31,7 @@ Sistema de microservicios con Flask que simula el flujo completo de un pedido de
 **Comunicacion entre servicios:**
 - `order_service` llama a `restaurant_service` para verificar que los items del menu existen antes de crear un pedido
 - `delivery_service` llama a `order_service` para verificar que el pedido esta en estado `ready` antes de asignar un repartidor
+- Ambas comunicaciones usan un **circuit breaker** con retry (3 intentos) y backoff exponencial
 
 ## Tecnologias
 
@@ -100,47 +101,58 @@ python delivery.py
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
 | POST | `/auth/token` | No | Login, devuelve JWT |
-| GET | `/restaurants` | JWT | Listar restaurantes |
 | POST | `/restaurants` | JWT | Crear restaurante |
-| GET | `/restaurants/:id` | JWT | Obtener restaurante |
-| PUT | `/restaurants/:id` | JWT | Actualizar restaurante |
-| DELETE | `/restaurants/:id` | JWT | Eliminar restaurante |
-| GET | `/restaurants/:id/menu` | JWT | Listar menu |
+| GET | `/restaurants/:id/menu` | JWT | Ver menu de un restaurante |
 | POST | `/restaurants/:id/menu` | JWT | Agregar item al menu |
-| GET | `/health` | No | Health check |
+
+**Endpoint interno** (solo accesible entre servicios con token interno):
+- `GET /menu-items/:id` — Devuelve un item del menu (usado por `order_service`)
 
 ### Order Service (puerto 5002)
 
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
-| POST | `/orders` | JWT | Crear pedido |
-| GET | `/orders` | JWT | Listar pedidos |
-| GET | `/orders/:id` | JWT | Obtener pedido con items |
+| POST | `/orders` | JWT | Crear pedido (valida items contra restaurant_service) |
 | PUT | `/orders/:id/status` | JWT | Cambiar estado del pedido |
-| DELETE | `/orders/:id` | JWT | Cancelar pedido |
-| GET | `/health` | No | Health check |
 
-**Estados del pedido:** `pending` → `confirmed` → `preparing` → `ready`
+**Endpoint interno:**
+- `GET /orders/:id/ready` — Verifica que el pedido este en estado `ready` (usado por `delivery_service`)
+
+**Estados del pedido:**
+```
+pending → confirmed → preparing → ready
+   ↓          ↓           ↓
+cancelled  cancelled   cancelled
+```
 
 ### Delivery Service (puerto 5003)
 
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
-| POST | `/deliveries` | JWT | Crear delivery |
-| GET | `/deliveries` | JWT | Listar deliveries |
-| GET | `/deliveries/:id` | JWT | Obtener delivery |
+| POST | `/deliveries` | JWT | Crear delivery (verifica pedido ready en order_service) |
 | PUT | `/deliveries/:id/status` | JWT | Cambiar estado del delivery |
-| DELETE | `/deliveries/:id` | JWT | Cancelar delivery |
-| GET | `/health` | No | Health check |
 
-**Estados del delivery:** `assigned` → `picked_up` → `in_transit` → `delivered`
+**Estados del delivery:**
+```
+assigned → picked_up → in_transit → delivered
+   ↓          ↓           ↓
+ failed     failed      failed
+```
+
+## Resiliencia: Circuit Breaker
+
+La comunicacion entre servicios (`order_service` → `restaurant_service` y `delivery_service` → `order_service`) implementa un circuit breaker:
+
+- **Retry**: 3 intentos con backoff exponencial (0.5s, 1s)
+- **Circuit breaker**: despues de 3 fallos consecutivos, el circuito se abre y las llamadas fallan inmediatamente por 30 segundos
+- **Half-open**: pasados los 30s, permite un intento de prueba para verificar si el servicio se recupero
 
 ## Flujo completo con Postman
 
 ### 1. Obtener token JWT
 ```
 POST http://localhost:5001/auth/token
-Body: { "username": "admin", "password": "admin123" }
+Body: { "username": "Rorro", "password": "rorro123" }
 ```
 Copiar el token de la respuesta y usarlo en todos los requests siguientes como header:
 ```
@@ -150,28 +162,38 @@ Authorization: Bearer <token>
 ### 2. Crear restaurante
 ```
 POST http://localhost:5001/restaurants
-Body: { "name": "Penguin Burgers", "address": "Antartida 123" }
+Body: { "name": "Rorro Burgers", "address": "Hola 123" }
 ```
 
 ### 3. Agregar items al menu
 ```
 POST http://localhost:5001/restaurants/1/menu
 Body: { "name": "Hamburguesa Clasica", "price": 8.50 }
+
+POST http://localhost:5001/restaurants/1/menu
+Body: { "name": "Papas Fritas", "price": 3.00 }
 ```
 
-### 4. Crear pedido
+### 4. Ver menu
+```
+GET http://localhost:5001/restaurants/1/menu
+```
+
+### 5. Crear pedido
 ```
 POST http://localhost:5002/orders
 Body: {
   "restaurant_id": 1,
-  "customer_name": "Pinguino Pepe",
+  "customer_name": "Pengu",
   "items": [
-    { "menu_item_id": 1, "quantity": 2 }
+    { "menu_item_id": 1, "quantity": 2 },
+    { "menu_item_id": 2, "quantity": 1 }
   ]
 }
 ```
+Total esperado: 8.50 x 2 + 3.00 x 1 = 20.00
 
-### 5. Avanzar estado del pedido hasta ready
+### 6. Avanzar estado del pedido hasta ready
 ```
 PUT http://localhost:5002/orders/1/status
 Body: { "status": "confirmed" }
@@ -183,17 +205,17 @@ PUT http://localhost:5002/orders/1/status
 Body: { "status": "ready" }
 ```
 
-### 6. Crear delivery
+### 7. Crear delivery
 ```
 POST http://localhost:5003/deliveries
 Body: {
   "order_id": 1,
-  "address": "Iglu 456, Polo Sur",
-  "driver_name": "Pingu Express"
+  "address": "Paraiso 640, and Mayas",
+  "driver_name": "Biggie Express"
 }
 ```
 
-### 7. Avanzar estado del delivery hasta delivered
+### 8. Avanzar estado del delivery hasta delivered
 ```
 PUT http://localhost:5003/deliveries/1/status
 Body: { "status": "picked_up" }
@@ -213,10 +235,20 @@ Con los 3 servicios corriendo, ejecutar:
 python test_flow.py
 ```
 
-Este script ejecuta el flujo completo de los 7 pasos anteriores de forma automatizada.
+Este script ejecuta 9 pasos de forma automatizada:
+1. Login y obtencion de JWT
+2. Crear restaurante
+3. Agregar items al menu
+4. Ver menu
+5. Crear pedido (comunicacion order → restaurant)
+6. Avanzar estado del pedido hasta `ready`
+7. Crear delivery (comunicacion delivery → order)
+8. Avanzar estado del delivery hasta `delivered`
+9. Prueba de seguridad (requests sin token, esperando 401)
 
 ## Seguridad
 
-- **JWT**: Todos los endpoints (excepto `/auth/token` y `/health`) requieren un token JWT valido
+- **JWT**: Todos los endpoints (excepto `/auth/token`) requieren un token JWT valido
 - **Token interno**: La comunicacion entre servicios usa un token interno separado para que los endpoints internos no sean accesibles desde Postman
-- **Credenciales demo**: usuario `admin`, password `admin123`
+- **Validacion de transiciones**: Los estados solo pueden avanzar en orden valido (no se puede saltar estados ni retroceder)
+- **Credenciales demo**: usuario `Rorro`, password `rorro123`

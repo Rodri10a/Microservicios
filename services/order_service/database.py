@@ -15,7 +15,7 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db():
-    with get_db() as conn:
+    with get_db() as conn: 
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS orders (
