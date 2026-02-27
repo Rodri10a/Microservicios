@@ -45,16 +45,21 @@ Sistema de microservicios con Flask que simula el flujo completo de un pedido de
 ```
 Microservicios/
 ├── services/
+│   ├── common/                    # Codigo compartido entre servicios
+│   │   ├── __init__.py            # Hace que common sea un paquete Python
+│   │   ├── config.py              # Constantes (SECRET_KEY, INTERNAL_TOKEN)
+│   │   ├── auth.py                # Decoradores (requiere_jwt, requiere_token_interno)
+│   │   └── circuit_breaker.py     # Retry + circuit breaker para llamadas entre servicios
 │   ├── restaurant_service/
-│   │   ├── restaurant.py      # Servicio principal (puerto 5001)
-│   │   └── database.py        # DB: restaurants, menu_items
+│   │   ├── restaurant.py          # Servicio principal (puerto 5001)
+│   │   └── database.py            # DB: restaurants, menu_items
 │   ├── order_service/
-│   │   ├── orders.py           # Servicio principal (puerto 5002)
-│   │   └── database.py        # DB: orders, order_items
+│   │   ├── orders.py              # Servicio principal (puerto 5002)
+│   │   └── database.py            # DB: orders, order_items
 │   └── delivery_service/
-│       ├── delivery.py         # Servicio principal (puerto 5003)
-│       └── database.py        # DB: deliveries
-├── test_flow.py               # Script de prueba end-to-end
+│       ├── delivery.py            # Servicio principal (puerto 5003)
+│       └── database.py            # DB: deliveries
+├── test_flow.py                   # Cliente interactivo para probar los servicios
 ├── requirements.txt
 └── README.md
 ```
@@ -227,7 +232,7 @@ PUT http://localhost:5003/deliveries/1/status
 Body: { "status": "delivered" }
 ```
 
-## Test automatizado
+## Cliente interactivo (test_flow.py)
 
 Con los 3 servicios corriendo, ejecutar:
 
@@ -235,16 +240,15 @@ Con los 3 servicios corriendo, ejecutar:
 python test_flow.py
 ```
 
-Este script ejecuta 9 pasos de forma automatizada:
-1. Login y obtencion de JWT
+Este script abre un menu interactivo con las siguientes opciones:
+1. Login (obtener JWT)
 2. Crear restaurante
-3. Agregar items al menu
+3. Agregar item al menu
 4. Ver menu
-5. Crear pedido (comunicacion order → restaurant)
-6. Avanzar estado del pedido hasta `ready`
-7. Crear delivery (comunicacion delivery → order)
-8. Avanzar estado del delivery hasta `delivered`
-9. Prueba de seguridad (requests sin token, esperando 401)
+5. Crear pedido
+6. Actualizar estado del pedido
+7. Crear delivery
+8. Actualizar estado del delivery
 
 ## Seguridad
 
