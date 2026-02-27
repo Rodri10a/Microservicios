@@ -1,81 +1,166 @@
-# test_flow.py — Prueba completa del flujo de microservicios
+# test_flow.py — Cliente interactivo para probar los microservicios
 # Ejecutar con: python test_flow.py  (con los 3 servicios corriendo)
 
+import json
 import requests
 
-RESTAURANT = "http://localhost:5001"
-ORDER      = "http://localhost:5002"
-DELIVERY   = "http://localhost:5003"
-
-def header(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-def paso(num, desc):
-    print(f"\n{'='*60}\n  PASO {num}: {desc}\n{'='*60}")
-
-def mostrar(resp):
-    print(f"  [{resp.status_code}] {resp.json()}")
-    return resp.json()
+RESTAURANT_URL = "http://localhost:5001"
+ORDER_URL      = "http://localhost:5002"
+DELIVERY_URL   = "http://localhost:5003"
+TOKEN = None
 
 
-# 1. Login
-paso(1, "LOGIN — obtener JWT")
-data = mostrar(requests.post(f"{RESTAURANT}/auth/token", json={"username": "Rorro", "password": "rorro123"}))
-TOKEN = data["token"]
-print(f"  Token: {TOKEN[:30]}...")
+# --- Helpers ---
 
-# 2. Crear restaurante
-paso(2, "CREAR RESTAURANTE")
-mostrar(requests.post(f"{RESTAURANT}/restaurants", headers=header(TOKEN), json={"name": "Rorro Burgers", "address": "Hola 123"}))
+def make_headers():
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    return headers
 
-# 3. Agregar items al menu
-paso(3, "AGREGAR ITEMS AL MENU")
-mostrar(requests.post(f"{RESTAURANT}/restaurants/1/menu", headers=header(TOKEN), json={"name": "Hamburguesa Clasica", "price": 8.50}))
-mostrar(requests.post(f"{RESTAURANT}/restaurants/1/menu", headers=header(TOKEN), json={"name": "Papas Fritas", "price": 3.00}))
 
-# 4. Ver menu
-paso(4, "VER MENU")
-mostrar(requests.get(f"{RESTAURANT}/restaurants/1/menu", headers=header(TOKEN)))
+def send_request(method, url, data=None):
+    headers = make_headers()
+    try:
+        if method == "GET":
+            resp = requests.get(url, headers=headers, timeout=3)
+        elif method == "POST":
+            resp = requests.post(url, headers=headers, data=json.dumps(data or {}), timeout=3)
+        elif method == "PUT":
+            resp = requests.put(url, headers=headers, data=json.dumps(data or {}), timeout=3)
+        else:
+            print(f"  Metodo HTTP no soportado: {method}")
+            return None
+    except requests.exceptions.ConnectionError:
+        print(f"\n  [ERROR] No se pudo conectar a {url}")
+        print("  Verifica que el microservicio correspondiente este levantado.")
+        return None
+    except requests.exceptions.Timeout:
+        print(f"\n  [ERROR] Timeout al llamar a {url}")
+        return None
 
-# 5. Crear pedido (order_service llama a restaurant_service)
-paso(5, "CREAR PEDIDO — order_service llama a restaurant_service")
-mostrar(requests.post(f"{ORDER}/orders", headers=header(TOKEN), json={
-    "restaurant_id": 1, "customer_name": "Pengu",
-    "items": [{"menu_item_id": 1, "quantity": 2}, {"menu_item_id": 2, "quantity": 1}]
-}))
-print("  Total esperado: 8.50 x 2 + 3.00 x 1 = 20.00")
+    print(f"\n  [{resp.status_code}] {resp.json()}")
+    return resp
 
-# 6. Avanzar estado del pedido
-paso(6, "AVANZAR ESTADO DEL PEDIDO")
-for estado in ["confirmed", "preparing", "ready"]:
-    mostrar(requests.put(f"{ORDER}/orders/1/status", headers=header(TOKEN), json={"status": estado}))
 
-# 7. Crear delivery (delivery_service llama a order_service)
-paso(7, "CREAR DELIVERY — delivery_service llama a order_service")
-mostrar(requests.post(f"{DELIVERY}/deliveries", headers=header(TOKEN), json={
-    "order_id": 1, "address": "Paraiso 640, and Mayas", "driver_name": "Biggie Express"
-}))
+# --- Restaurantes ---
 
-# 8. Avanzar estado del delivery
-paso(8, "AVANZAR ESTADO DEL DELIVERY")
-for estado in ["picked_up", "in_transit", "delivered"]:
-    mostrar(requests.put(f"{DELIVERY}/deliveries/1/status", headers=header(TOKEN), json={"status": estado}))
+def login():
+    global TOKEN
+    print("\n=== Login ===")
+    username = input("  Usuario: ").strip()
+    password = input("  Password: ").strip()
+    resp = send_request("POST", f"{RESTAURANT_URL}/auth/token", {"username": username, "password": password})
+    if resp and resp.status_code == 200:
+        TOKEN = resp.json()["token"]
+        print(f"  Token guardado correctamente")
 
-# 9. Probar seguridad (sin token, debe dar 401)
-paso(9, "SEGURIDAD — requests sin token")
-mostrar(requests.post(f"{RESTAURANT}/restaurants", json={"name": "Hack", "address": "x"}))
-mostrar(requests.post(f"{ORDER}/orders", json={}))
-print("  Esperado: 401 en ambos")
 
-# Resumen
-print(f"\n{'='*60}\n  FLUJO COMPLETO OK\n{'='*60}")
-print("""  restaurant_service (5001) -> Restaurante + menu creados
-  order_service      (5002) -> Pedido creado y avanzado a 'ready'
-  delivery_service   (5003) -> Delivery creado y entregado
+def crear_restaurante():
+    print("\n=== Crear restaurante ===")
+    name = input("  Nombre: ").strip()
+    address = input("  Direccion: ").strip()
+    send_request("POST", f"{RESTAURANT_URL}/restaurants", {"name": name, "address": address})
 
-  Comunicacion entre servicios:
-    order_service    -> llama a restaurant_service (paso 5)
-    delivery_service -> llama a order_service      (paso 7)
 
-  Seguridad: JWT requerido + token interno entre servicios
-""")
+def agregar_item_menu():
+    print("\n=== Agregar item al menu ===")
+    rid = input("  ID del restaurante: ").strip()
+    name = input("  Nombre del item: ").strip()
+    price = float(input("  Precio: ").strip())
+    send_request("POST", f"{RESTAURANT_URL}/restaurants/{rid}/menu", {"name": name, "price": price})
+
+
+def ver_menu():
+    print("\n=== Ver menu ===")
+    rid = input("  ID del restaurante: ").strip()
+    send_request("GET", f"{RESTAURANT_URL}/restaurants/{rid}/menu")
+
+
+# --- Pedidos ---
+
+def crear_pedido():
+    print("\n=== Crear pedido ===")
+    rid = input("  ID del restaurante: ").strip()
+    customer = input("  Nombre del cliente: ").strip()
+    items = []
+    while True:
+        mid = input("  ID del item del menu (enter para terminar): ").strip()
+        if not mid:
+            break
+        qty = int(input("  Cantidad: ").strip())
+        items.append({"menu_item_id": int(mid), "quantity": qty})
+    if not items:
+        print("  Pedido cancelado (sin items)")
+        return
+    send_request("POST", f"{ORDER_URL}/orders", {"restaurant_id": int(rid), "customer_name": customer, "items": items})
+
+
+def actualizar_estado_pedido():
+    print("\n=== Actualizar estado del pedido ===")
+    oid = input("  ID del pedido: ").strip()
+    print("  Estados: pending -> confirmed -> preparing -> ready (o cancelled)")
+    status = input("  Nuevo estado: ").strip()
+    send_request("PUT", f"{ORDER_URL}/orders/{oid}/status", {"status": status})
+
+
+# --- Deliveries ---
+
+def crear_delivery():
+    print("\n=== Crear delivery ===")
+    oid = input("  ID del pedido: ").strip()
+    address = input("  Direccion de entrega: ").strip()
+    driver = input("  Nombre del repartidor: ").strip()
+    send_request("POST", f"{DELIVERY_URL}/deliveries", {"order_id": int(oid), "address": address, "driver_name": driver})
+
+
+def actualizar_estado_delivery():
+    print("\n=== Actualizar estado del delivery ===")
+    did = input("  ID del delivery: ").strip()
+    print("  Estados: assigned -> picked_up -> in_transit -> delivered (o failed)")
+    status = input("  Nuevo estado: ").strip()
+    send_request("PUT", f"{DELIVERY_URL}/deliveries/{did}/status", {"status": status})
+
+
+# --- Menu principal ---
+
+def main_menu():
+    while True:
+        print("\n=== CLIENTE MICROSERVICIOS ===")
+        print("1) Login (obtener JWT)")
+        print("2) Crear restaurante")
+        print("3) Agregar item al menu")
+        print("4) Ver menu")
+        print("5) Crear pedido")
+        print("6) Actualizar estado del pedido")
+        print("7) Crear delivery")
+        print("8) Actualizar estado del delivery")
+        print("0) Salir")
+
+        choice = input("\nOpcion: ").strip()
+
+        if choice == "1":
+            login()
+        elif choice == "2":
+            crear_restaurante()
+        elif choice == "3":
+            agregar_item_menu()
+        elif choice == "4":
+            ver_menu()
+        elif choice == "5":
+            crear_pedido()
+        elif choice == "6":
+            actualizar_estado_pedido()
+        elif choice == "7":
+            crear_delivery()
+        elif choice == "8":
+            actualizar_estado_delivery()
+        elif choice == "0":
+            print("Saliendo del cliente...")
+            break
+        else:
+            print("Opcion invalida.")
+
+
+if __name__ == "__main__":
+    main_menu()
