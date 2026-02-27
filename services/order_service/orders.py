@@ -1,16 +1,15 @@
 # orders.py — Servicio de Pedidos | Puerto: 5002
 
-import os, time, logging
-from functools import wraps
-import jwt
-import requests as http_requests
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from flask import Flask, jsonify, request
 from database import get_db, init_db
+from common.config import INTERNAL_TOKEN
+from common.auth import requiere_jwt, requiere_token_interno
+from common.circuit_breaker import llamar_servicio
 
 app = Flask(__name__)
-logger = logging.getLogger(__name__)
-SECRET_KEY     = os.getenv("SECRET_KEY", "RorroArguello")
-INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno")
 RESTAURANT_URL = os.getenv("RESTAURANT_SERVICE_URL", "http://localhost:5001")
 
 TRANSICIONES = {
@@ -18,66 +17,8 @@ TRANSICIONES = {
     "confirmed": ["preparing", "cancelled"],
     "preparing": ["ready",     "cancelled"],
     "ready":     [],
-    "cancelled": []
+    "cancelled": [] 
 }
-
-
-def requiere_jwt(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return jsonify({"error": "Token JWT requerido"}), 401
-        try:
-            request.usuario = jwt.decode(auth.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return jsonify({"error": "Token invalido o expirado"}), 401
-        return f(*args, **kwargs)
-    return decorador
-
-
-def requiere_token_interno(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-        if token != INTERNAL_TOKEN:
-            return jsonify({"error": "Acceso restringido a servicios internos"}), 403
-        return f(*args, **kwargs)
-    return decorador
-
-
-# --- Circuit Breaker: falla inmediato despues de 3 fallos seguidos por 30s ---
-
-circuito = {"fallos": 0, "estado": "closed", "abierto_desde": 0}
-
-def llamar_servicio(url, servicio):
-    if circuito["estado"] == "open":
-        if time.time() - circuito["abierto_desde"] >= 30:
-            circuito["estado"] = "half_open"
-        else:
-            raise Exception(f"{servicio} no disponible (circuit breaker abierto)")
-
-    for intento in range(1, 4):
-        try:
-            resp = http_requests.get(url, headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"}, timeout=3)
-            if resp.status_code in (404, 422):
-                raise ValueError(resp.json().get("error", "Error en recurso"))
-            resp.raise_for_status()
-            circuito["fallos"], circuito["estado"] = 0, "closed"
-            return resp.json()
-        except ValueError:
-            circuito["fallos"], circuito["estado"] = 0, "closed"
-            raise
-        except Exception as e:
-            logger.warning(f"[{servicio}] Intento {intento}/3 fallo: {e}")
-            if intento < 3:
-                time.sleep(0.5 * intento)
-
-    circuito["fallos"] += 1
-    if circuito["fallos"] >= 3:
-        circuito["estado"], circuito["abierto_desde"] = "open", time.time()
-        logger.warning(f"[circuit_breaker] ABIERTO — pausando 30s")
-    raise Exception(f"{servicio} no disponible")
 
 
 # --- Endpoints (3) ---
@@ -108,11 +49,11 @@ def crear_pedido():
 
     with get_db() as conn:
         cur = conn.execute("INSERT INTO orders (restaurant_id, customer_name, total) VALUES (?, ?, ?)",
-                           (datos["restaurant_id"], datos["customer_name"], round(total, 2)))
+                        (datos["restaurant_id"], datos["customer_name"], round(total, 2)))
         order_id = cur.lastrowid
         for item in items_ok:
             conn.execute("INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price, quantity) VALUES (?, ?, ?, ?, ?)",
-                         (order_id, item["menu_item_id"], item["item_name"], item["unit_price"], item["quantity"]))
+                        (order_id, item["menu_item_id"], item["item_name"], item["unit_price"], item["quantity"]))
         conn.commit()
 
     return jsonify({"message": "Pedido creado", "order": {
@@ -153,7 +94,7 @@ def verificar_listo(oid):
     if order["status"] != "ready":
         return jsonify({"error": f"Pedido no listo (estado: '{order['status']}')"}), 422
     return jsonify({"order_id": order["id"], "customer_name": order["customer_name"],
-                     "restaurant_id": order["restaurant_id"], "total": order["total"]})
+                    "restaurant_id": order["restaurant_id"], "total": order["total"]})
 
 
 if __name__ == "__main__":

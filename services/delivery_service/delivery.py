@@ -1,17 +1,15 @@
 # delivery.py — Servicio de Delivery | Puerto: 5003
 
-import os, time, logging
-from functools import wraps
-import jwt
-import requests as http_requests
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from flask import Flask, jsonify, request
 from database import get_db, init_db
+from common.auth import requiere_jwt
+from common.circuit_breaker import llamar_servicio
 
 app = Flask(__name__)
-logger = logging.getLogger(__name__)
-SECRET_KEY     = os.getenv("SECRET_KEY", "RorroArguello")
-INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno")
-ORDER_URL      = os.getenv("ORDER_SERVICE_URL", "http://localhost:5002")
+ORDER_URL = os.getenv("ORDER_SERVICE_URL", "http://localhost:5002")
 
 TRANSICIONES = {
     "assigned":   ["picked_up",  "failed"],
@@ -19,55 +17,7 @@ TRANSICIONES = {
     "in_transit": ["delivered",  "failed"],
     "delivered":  [],
     "failed":     []
-}
-
-
-def requiere_jwt(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return jsonify({"error": "Token JWT requerido"}), 401
-        try:
-            request.usuario = jwt.decode(auth.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return jsonify({"error": "Token invalido o expirado"}), 401
-        return f(*args, **kwargs)
-    return decorador
-
-
-# --- Circuit Breaker: falla inmediato despues de 3 fallos seguidos por 30s ---
-
-circuito = {"fallos": 0, "estado": "closed", "abierto_desde": 0}
-
-def llamar_servicio(url, servicio):
-    if circuito["estado"] == "open":
-        if time.time() - circuito["abierto_desde"] >= 30:
-            circuito["estado"] = "half_open"
-        else:
-            raise Exception(f"{servicio} no disponible (circuit breaker abierto)")
-
-    for intento in range(1, 4):
-        try:
-            resp = http_requests.get(url, headers={"Authorization": f"Bearer {INTERNAL_TOKEN}"}, timeout=3)
-            if resp.status_code in (404, 422):
-                raise ValueError(resp.json().get("error", "Error en recurso"))
-            resp.raise_for_status()
-            circuito["fallos"], circuito["estado"] = 0, "closed"
-            return resp.json()
-        except ValueError:
-            circuito["fallos"], circuito["estado"] = 0, "closed"
-            raise
-        except Exception as e:
-            logger.warning(f"[{servicio}] Intento {intento}/3 fallo: {e}")
-            if intento < 3:
-                time.sleep(0.5 * intento)
-
-    circuito["fallos"] += 1
-    if circuito["fallos"] >= 3:
-        circuito["estado"], circuito["abierto_desde"] = "open", time.time()
-        logger.warning(f"[circuit_breaker] ABIERTO — pausando 30s")
-    raise Exception(f"{servicio} no disponible")
+} 
 
 
 # --- Endpoints (2) ---
@@ -91,7 +41,7 @@ def crear_delivery():
         if conn.execute("SELECT id FROM deliveries WHERE order_id = ?", (datos["order_id"],)).fetchone():
             return jsonify({"error": f"Ya existe delivery para pedido {datos['order_id']}"}), 409
         cur = conn.execute("INSERT INTO deliveries (order_id, customer_name, address, driver_name) VALUES (?, ?, ?, ?)",
-                           (datos["order_id"], pedido["customer_name"], datos["address"], datos.get("driver_name", "Sin asignar")))
+                        (datos["order_id"], pedido["customer_name"], datos["address"], datos.get("driver_name", "Sin asignar")))
         conn.commit()
 
     return jsonify({"message": "Delivery creado", "delivery": {

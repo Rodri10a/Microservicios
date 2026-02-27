@@ -1,39 +1,16 @@
 # restaurant.py — Servicio de Restaurantes | Puerto: 5001
 
-import os, datetime
-from functools import wraps
+import sys, os, datetime
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import jwt
 from flask import Flask, jsonify, request
 from database import get_db, init_db
+from common.config import SECRET_KEY
+from common.auth import requiere_jwt, requiere_token_interno
 
 app = Flask(__name__)
-SECRET_KEY     = os.getenv("SECRET_KEY", "RorroArguello")
-INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "token_interno")
-DEMO_USER      = {"username": "Rorro", "password": "rorro123", "role": "admin"}
-
-
-def requiere_jwt(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return jsonify({"error": "Token JWT requerido"}), 401
-        try:
-            request.usuario = jwt.decode(auth.split(" ")[1], SECRET_KEY, algorithms=["HS256"])
-        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
-            return jsonify({"error": "Token invalido o expirado"}), 401
-        return f(*args, **kwargs)
-    return decorador
-
-
-def requiere_token_interno(f):
-    @wraps(f)
-    def decorador(*args, **kwargs):
-        token = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-        if token != INTERNAL_TOKEN:
-            return jsonify({"error": "Acceso restringido a servicios internos"}), 403
-        return f(*args, **kwargs)
-    return decorador
+DEMO_USER = {"username": "Rorro", "password": "rorro123", "role": "admin"}
 
 
 # --- Endpoints (5) ---
@@ -47,7 +24,7 @@ def login():
         return jsonify({"error": "Credenciales incorrectas"}), 401
 
     token = jwt.encode({"username": datos["username"], "role": DEMO_USER["role"],
-                         "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)}, SECRET_KEY, algorithm="HS256")
+                        "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)}, SECRET_KEY, algorithm="HS256")
     return jsonify({"token": token, "expires_in": "8h"})
 
 
@@ -61,7 +38,7 @@ def crear_restaurante():
 
     with get_db() as conn:
         cur = conn.execute("INSERT INTO restaurants (name, address, phone) VALUES (?, ?, ?)",
-                           (datos["name"], datos["address"], datos.get("phone", "")))
+                        (datos["name"], datos["address"], datos.get("phone", "")))
         conn.commit()
     return jsonify({"message": "Restaurante creado", "restaurant": {"id": cur.lastrowid, "name": datos["name"]}}), 201
 
