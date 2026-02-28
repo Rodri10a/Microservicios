@@ -13,20 +13,16 @@ def get_db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-
+ 
 def init_db():
     with get_db() as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS deliveries ( 
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                order_id      INTEGER NOT NULL UNIQUE,
-                customer_name TEXT    NOT NULL,
-                driver_name   TEXT,
-                status        TEXT    NOT NULL DEFAULT 'assigned',
-                address       TEXT    NOT NULL,
-                created_at    TEXT    DEFAULT (datetime('now')),
-                updated_at    TEXT    DEFAULT (datetime('now'))
+            CREATE TABLE IF NOT EXISTS deliveries (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL UNIQUE,
+                address  TEXT    NOT NULL,
+                status   TEXT    NOT NULL DEFAULT 'assigned'
             )
         """)
         conn.commit()
-        
+         
