@@ -57,7 +57,7 @@ Microservicios/
 │   └── delivery_service/
 │       ├── delivery.py            # Servicio principal (puerto 5003)
 │       └── database.py            # DB: deliveries
-├── test_flow.py                   # Cliente interactivo para probar los servicios
+├── script.py                      # Script automatico para probar el flujo completo
 ├── requirements.txt
 └── README.md
 ```
@@ -220,22 +220,20 @@ PUT http://localhost:5003/deliveries/1
 Body: { "status": "delivered" }
 ```
 
-## Cliente interactivo (test_flow.py)
+## Script de prueba automatico (script.py)
 
 Con los 3 servicios corriendo, ejecutar:
 
 ```bash
-python test_flow.py
+python script.py
 ```
 
-Este script abre un menu interactivo con las siguientes opciones:
+Este script ejecuta automaticamente el flujo completo:
 1. Login (obtener JWT)
-2. Agregar item al menu
-3. Ver menu
-4. Crear pedido
-5. Actualizar estado del pedido
-6. Crear delivery
-7. Actualizar estado del delivery
+2. Agregar items al menu
+3. Crear pedido con esos items
+4. Avanzar el pedido: pending → confirmed → preparing → ready
+5. Crear delivery y avanzarlo: assigned → picked_up → in_transit → delivered
 
 ## Seguridad
 
