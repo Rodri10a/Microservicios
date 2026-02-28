@@ -10,7 +10,6 @@ Sistema de microservicios con Flask que simula el flujo completo de un pedido de
      │                                                          │
      │         ┌──────────────────┐                             │
      ├────────>│ restaurant_service│ :5001                      │
-     │         │  - Restaurantes  │                             │
      │         │  - Menu items    │                             │
      │         │  - Auth (JWT)    │<──────────┐                 │
      │         └──────────────────┘           │                 │
@@ -18,8 +17,7 @@ Sistema de microservicios con Flask que simula el flujo completo de un pedido de
      │         ┌──────────────────┐           │                 │
      ├────────>│  order_service   │ :5002     │                 │
      │         │  - Pedidos       │───────────┘                 │
-     │         │  - Order items   │<──────────┐                 │
-     │         └──────────────────┘           │                 │
+     │         └──────────────────┘<──────────┐                 │
      │                                  token interno           │
      │         ┌──────────────────┐           │                 │
      └────────>│ delivery_service │ :5003     │                 │
@@ -52,10 +50,10 @@ Microservicios/
 │   │   └── circuit_breaker.py     # Retry + circuit breaker para llamadas entre servicios
 │   ├── restaurant_service/
 │   │   ├── restaurant.py          # Servicio principal (puerto 5001)
-│   │   └── database.py            # DB: restaurants, menu_items
+│   │   └── database.py            # DB: menu_items
 │   ├── order_service/
 │   │   ├── orders.py              # Servicio principal (puerto 5002)
-│   │   └── database.py            # DB: orders, order_items
+│   │   └── database.py            # DB: orders (items como JSON)
 │   └── delivery_service/
 │       ├── delivery.py            # Servicio principal (puerto 5003)
 │       └── database.py            # DB: deliveries
@@ -106,9 +104,8 @@ python delivery.py
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
 | POST | `/auth/token` | No | Login, devuelve JWT |
-| POST | `/restaurants` | JWT | Crear restaurante |
-| GET | `/restaurants/:id/menu` | JWT | Ver menu de un restaurante |
-| POST | `/restaurants/:id/menu` | JWT | Agregar item al menu |
+| GET | `/menu` | JWT | Ver menu (filtrar con `?restaurant=nombre`) |
+| POST | `/menu` | JWT | Agregar item al menu |
 
 **Endpoint interno** (solo accesible entre servicios con token interno):
 - `GET /menu-items/:id` — Devuelve un item del menu (usado por `order_service`)
@@ -118,7 +115,7 @@ python delivery.py
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
 | POST | `/orders` | JWT | Crear pedido (valida items contra restaurant_service) |
-| PUT | `/orders/:id/status` | JWT | Cambiar estado del pedido |
+| PUT | `/orders/:id` | JWT | Cambiar estado del pedido |
 
 **Endpoint interno:**
 - `GET /orders/:id/ready` — Verifica que el pedido este en estado `ready` (usado por `delivery_service`)
@@ -135,7 +132,7 @@ cancelled  cancelled   cancelled
 | Metodo | Endpoint | Auth | Descripcion |
 |--------|----------|------|-------------|
 | POST | `/deliveries` | JWT | Crear delivery (verifica pedido ready en order_service) |
-| PUT | `/deliveries/:id/status` | JWT | Cambiar estado del delivery |
+| PUT | `/deliveries/:id` | JWT | Cambiar estado del delivery |
 
 **Estados del delivery:**
 ```
@@ -164,31 +161,26 @@ Copiar el token de la respuesta y usarlo en todos los requests siguientes como h
 Authorization: Bearer <token>
 ```
 
-### 2. Crear restaurante
+### 2. Agregar items al menu
 ```
-POST http://localhost:5001/restaurants
-Body: { "name": "Rorro Burgers", "address": "Hola 123" }
+POST http://localhost:5001/menu
+Body: { "restaurant_name": "Rorro Burgers", "name": "Hamburguesa Clasica", "price": 8.50 }
+
+POST http://localhost:5001/menu
+Body: { "restaurant_name": "Rorro Burgers", "name": "Papas Fritas", "price": 3.00 }
 ```
 
-### 3. Agregar items al menu
+### 3. Ver menu
 ```
-POST http://localhost:5001/restaurants/1/menu
-Body: { "name": "Hamburguesa Clasica", "price": 8.50 }
-
-POST http://localhost:5001/restaurants/1/menu
-Body: { "name": "Papas Fritas", "price": 3.00 }
+GET http://localhost:5001/menu
+GET http://localhost:5001/menu?restaurant=Rorro Burgers
 ```
 
-### 4. Ver menu
-```
-GET http://localhost:5001/restaurants/1/menu
-```
-
-### 5. Crear pedido
+### 4. Crear pedido
 ```
 POST http://localhost:5002/orders
 Body: {
-  "restaurant_id": 1,
+  "restaurant_name": "Rorro Burgers",
   "customer_name": "Pengu",
   "items": [
     { "menu_item_id": 1, "quantity": 2 },
@@ -198,37 +190,33 @@ Body: {
 ```
 Total esperado: 8.50 x 2 + 3.00 x 1 = 20.00
 
-### 6. Avanzar estado del pedido hasta ready
+### 5. Avanzar estado del pedido hasta ready
 ```
-PUT http://localhost:5002/orders/1/status
+PUT http://localhost:5002/orders/1
 Body: { "status": "confirmed" }
 
-PUT http://localhost:5002/orders/1/status
+PUT http://localhost:5002/orders/1
 Body: { "status": "preparing" }
 
-PUT http://localhost:5002/orders/1/status
+PUT http://localhost:5002/orders/1
 Body: { "status": "ready" }
 ```
 
-### 7. Crear delivery
+### 6. Crear delivery
 ```
 POST http://localhost:5003/deliveries
-Body: {
-  "order_id": 1,
-  "address": "Paraiso 640, and Mayas",
-  "driver_name": "Biggie Express"
-}
+Body: { "order_id": 1, "address": "Paraiso 640, and Mayas" }
 ```
 
-### 8. Avanzar estado del delivery hasta delivered
+### 7. Avanzar estado del delivery hasta delivered
 ```
-PUT http://localhost:5003/deliveries/1/status
+PUT http://localhost:5003/deliveries/1
 Body: { "status": "picked_up" }
 
-PUT http://localhost:5003/deliveries/1/status
+PUT http://localhost:5003/deliveries/1
 Body: { "status": "in_transit" }
 
-PUT http://localhost:5003/deliveries/1/status
+PUT http://localhost:5003/deliveries/1
 Body: { "status": "delivered" }
 ```
 
@@ -242,13 +230,12 @@ python test_flow.py
 
 Este script abre un menu interactivo con las siguientes opciones:
 1. Login (obtener JWT)
-2. Crear restaurante
-3. Agregar item al menu
-4. Ver menu
-5. Crear pedido
-6. Actualizar estado del pedido
-7. Crear delivery
-8. Actualizar estado del delivery
+2. Agregar item al menu
+3. Ver menu
+4. Crear pedido
+5. Actualizar estado del pedido
+6. Crear delivery
+7. Actualizar estado del delivery
 
 ## Seguridad
 
