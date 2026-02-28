@@ -56,32 +56,28 @@ def login():
         print(f"  Token guardado correctamente")
 
 
-def crear_restaurante():
-    print("\n=== Crear restaurante ===")
-    name = input("  Nombre: ").strip()
-    address = input("  Direccion: ").strip()
-    send_request("POST", f"{RESTAURANT_URL}/restaurants", {"name": name, "address": address})
-
-
 def agregar_item_menu():
     print("\n=== Agregar item al menu ===")
-    rid = input("  ID del restaurante: ").strip()
+    restaurant = input("  Nombre del restaurante: ").strip()
     name = input("  Nombre del item: ").strip()
     price = float(input("  Precio: ").strip())
-    send_request("POST", f"{RESTAURANT_URL}/restaurants/{rid}/menu", {"name": name, "price": price})
+    send_request("POST", f"{RESTAURANT_URL}/menu", {"restaurant_name": restaurant, "name": name, "price": price})
 
 
 def ver_menu():
     print("\n=== Ver menu ===")
-    rid = input("  ID del restaurante: ").strip()
-    send_request("GET", f"{RESTAURANT_URL}/restaurants/{rid}/menu")
+    restaurant = input("  Nombre del restaurante (enter para ver todo): ").strip()
+    url = f"{RESTAURANT_URL}/menu"
+    if restaurant:
+        url += f"?restaurant={restaurant}"
+    send_request("GET", url)
 
 
 # --- Pedidos ---
 
 def crear_pedido():
     print("\n=== Crear pedido ===")
-    rid = input("  ID del restaurante: ").strip()
+    restaurant = input("  Nombre del restaurante: ").strip()
     customer = input("  Nombre del cliente: ").strip()
     items = []
     while True:
@@ -93,7 +89,7 @@ def crear_pedido():
     if not items:
         print("  Pedido cancelado (sin items)")
         return
-    send_request("POST", f"{ORDER_URL}/orders", {"restaurant_id": int(rid), "customer_name": customer, "items": items})
+    send_request("POST", f"{ORDER_URL}/orders", {"restaurant_name": restaurant, "customer_name": customer, "items": items})
 
 
 def actualizar_estado_pedido():
@@ -101,7 +97,7 @@ def actualizar_estado_pedido():
     oid = input("  ID del pedido: ").strip()
     print("  Estados: pending -> confirmed -> preparing -> ready (o cancelled)")
     status = input("  Nuevo estado: ").strip()
-    send_request("PUT", f"{ORDER_URL}/orders/{oid}/status", {"status": status})
+    send_request("PUT", f"{ORDER_URL}/orders/{oid}", {"status": status})
 
 
 # --- Deliveries ---
@@ -110,8 +106,7 @@ def crear_delivery():
     print("\n=== Crear delivery ===")
     oid = input("  ID del pedido: ").strip()
     address = input("  Direccion de entrega: ").strip()
-    driver = input("  Nombre del repartidor: ").strip()
-    send_request("POST", f"{DELIVERY_URL}/deliveries", {"order_id": int(oid), "address": address, "driver_name": driver})
+    send_request("POST", f"{DELIVERY_URL}/deliveries", {"order_id": int(oid), "address": address})
 
 
 def actualizar_estado_delivery():
@@ -119,7 +114,7 @@ def actualizar_estado_delivery():
     did = input("  ID del delivery: ").strip()
     print("  Estados: assigned -> picked_up -> in_transit -> delivered (o failed)")
     status = input("  Nuevo estado: ").strip()
-    send_request("PUT", f"{DELIVERY_URL}/deliveries/{did}/status", {"status": status})
+    send_request("PUT", f"{DELIVERY_URL}/deliveries/{did}", {"status": status})
 
 
 # --- Menu principal ---
@@ -128,13 +123,12 @@ def main_menu():
     while True:
         print("\n=== CLIENTE MICROSERVICIOS ===")
         print("1) Login (obtener JWT)")
-        print("2) Crear restaurante")
-        print("3) Agregar item al menu")
-        print("4) Ver menu")
-        print("5) Crear pedido")
-        print("6) Actualizar estado del pedido")
-        print("7) Crear delivery")
-        print("8) Actualizar estado del delivery")
+        print("2) Agregar item al menu")
+        print("3) Ver menu")
+        print("4) Crear pedido")
+        print("5) Actualizar estado del pedido")
+        print("6) Crear delivery")
+        print("7) Actualizar estado del delivery")
         print("0) Salir")
 
         choice = input("\nOpcion: ").strip()
@@ -142,18 +136,16 @@ def main_menu():
         if choice == "1":
             login()
         elif choice == "2":
-            crear_restaurante()
-        elif choice == "3":
             agregar_item_menu()
-        elif choice == "4":
+        elif choice == "3":
             ver_menu()
-        elif choice == "5":
+        elif choice == "4":
             crear_pedido()
-        elif choice == "6":
+        elif choice == "5":
             actualizar_estado_pedido()
-        elif choice == "7":
+        elif choice == "6":
             crear_delivery()
-        elif choice == "8":
+        elif choice == "7":
             actualizar_estado_delivery()
         elif choice == "0":
             print("Saliendo del cliente...")
