@@ -1,16 +1,9 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# database.py — Servicio de Delivery
-# Base de datos EXCLUSIVA de este servicio.
-# ═══════════════════════════════════════════════════════════════════════════════
 
 import sqlite3
-
 DB_PATH = "delivery.db"
-
-
 def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn.row_factory = sqlite3.Row 
     return conn
 
  
@@ -25,4 +18,4 @@ def init_db():
             )
         """)
         conn.commit()
-         
+

@@ -1,23 +1,13 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# database.py — Servicio de Restaurantes
-# Responsabilidad exclusiva: conexión e inicialización de la DB de este servicio.
-# Ningún otro servicio toca este archivo ni esta base de datos.
-# ═══════════════════════════════════════════════════════════════════════════════
 
 import sqlite3
 
 DB_PATH = "restaurant.db"
-
-
-def get_db() -> sqlite3.Connection:
-    """Retorna una conexión con row_factory para acceder columnas por nombre."""
+def get_db() -> sqlite3.Connection: 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def init_db():
-    """Crea la tabla si no existe. Se llama al arrancar el servicio."""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS menu_items (

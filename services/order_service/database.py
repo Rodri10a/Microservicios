@@ -1,7 +1,3 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# database.py — Servicio de Pedidos
-# Base de datos EXCLUSIVA de este servicio. No compartida con nadie.
-# ═══════════════════════════════════════════════════════════════════════════════
 
 import sqlite3
 
